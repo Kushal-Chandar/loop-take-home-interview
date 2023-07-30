@@ -1,8 +1,8 @@
 import psycopg2, os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import List, Tuple
-from timezone_conversion import UTCToLocalTimezone
+from timezone_conversion import UTCToLocalTimezone, ChangeTimezone
 
 load_dotenv()
 
@@ -59,101 +59,251 @@ def getTimestampsStatusInterval(
 
 
 def getTimestampsLastHour(store_id: int) -> List[Tuple[datetime, str]]:
-    return getTimestampsStatusInterval(store_id, "1 hour")
+    return getTimestampsStatusInterval(store_id=store_id, interval="1 hour")
 
 
 def getTimestampsLastDay(store_id: int) -> List[Tuple[datetime, str]]:
-    return getTimestampsStatusInterval(store_id, "1 day")
+    return getTimestampsStatusInterval(store_id=store_id, interval="1 day")
 
 
 def getTimestampsLastWeek(store_id: int) -> List[Tuple[datetime, str]]:
-    return getTimestampsStatusInterval(store_id, "1 week")
+    return getTimestampsStatusInterval(store_id=store_id, interval="1 week")
 
 
-def getBusinessHoursTimestampDay(
-    store_id: int, timestamp: datetime
+def getTimestamps(store_id: int) -> List[Tuple[datetime, str]]:
+    cur.execute(
+        f"""
+    SELECT timestamp_utc, status
+    FROM store_status
+    WHERE timestamp_utc >= AND store_id = {store_id}
+    ORDER BY timestamp_utc DESC
+    """
+    )
+    return cur.fetchall()
+
+
+def getStoreTimezone(store_id: int) -> str:
+    cur.execute(
+        f"""SELECT timezone_str FROM store_timezones WHERE store_id = {store_id}"""
+    )
+    timezone = cur.fetchone()
+    if timezone == None or (not timezone[0]):
+        return "America/Chicago"
+    else:
+        return timezone[0]
+
+
+def is247Operational(store_id: int) -> bool:
+    cur.execute(
+        f"""
+    SELECT start_time_local, end_time_local
+    FROM business_hours
+    WHERE store_id = {store_id}
+    """
+    )
+    business_hours = cur.fetchall()
+    return True if len(business_hours) == 0 else False
+
+
+def getBusinessHourTimestamp(
+    store_id: int, timestamp: datetime, timezone: str
 ) -> Tuple[datetime, datetime] | None:
     """
-    Returns the business hours for day on which the timestamp was recorded
-    Else returns null
+    Return business hour for particular timestamp or None, in local time.
     """
     cur.execute(
         f"""
     SELECT start_time_local, end_time_local
     FROM business_hours
-    WHERE store_id = {store_id} and "dayOfWeek" = {timestamp.weekday()}
+    WHERE store_id = {store_id} AND "dayOfWeek" = {timestamp.weekday()}
     """
     )
-    business_hours = cur.fetchall()
-    # business_hours not given
-    if len(business_hours) != 0:
-        # business_hours.append((datetime.time(0,0), datetime.time(24,)))
-        print(business_hours[0])
-
-    for timeslot in business_hours:
-        [start_time, end_time] = timeslot
+    business_hours: List[Tuple[time, time]] = cur.fetchall()
+    for [start_time, end_time] in business_hours:
         if timestamp.time() >= start_time and timestamp.time() <= end_time:
-            return timeslot
+            return (
+                ChangeTimezone(
+                    datetime.combine(timestamp.date(), start_time), timezone
+                ),
+                ChangeTimezone(datetime.combine(timestamp.date(), end_time), timezone),
+            )
     return None
 
 
-cur.execute("""SELECT * FROM store_timezones""")
-stores_with_timezones = cur.fetchall()
+# Get all distinct stores
+cur.execute("""SELECT DISTINCT store_id FROM store_status""")
+stores = cur.fetchall()
 
-for store in stores_with_timezones:
-    store_id: int = store[0]
-    timezone: str = store[1] if store[1] else "America/Chicago"
+for store in stores:
+    # store_id: int = store[0]
+    # store_id = 5125947543803222292
+    # store_id = 85496058573776375
+    # store_id = 7828565466095434540
+    store_id = 2570905277901393
+    timezone: str = getStoreTimezone(store_id=store_id)
     store_status_timestamps: List[Tuple[datetime, str]] = getTimestampsLastWeek(
         store_id
     )
-    current_timestamp_local = UTCToLocalTimezone(CURRENT_TIMESTAMP, timezone)
-    last_time_stamp = current_timestamp_local
-    uptime_hour_min = 0
-    uptime_day_min = 0
-    uptime_week_min = 0
-    downtime_hour_min = 0
-    downtime_day_min = 0
-    downtime_week_min = 0
-    for [timestamp_utc, status] in store_status_timestamps:
-        active: bool = True if status == "active" else False
-        local_timestamp: datetime = UTCToLocalTimezone(timestamp_utc, timezone)
-        business_hours = getBusinessHoursTimestampDay(store_id, local_timestamp)
-        print(local_timestamp, business_hours)
-        if business_hours != None:
-            if last_time_stamp.date() != local_timestamp.date():
-                print("Hello")
-                continue
-            print(last_time_stamp, local_timestamp)
-            timediff = ((last_time_stamp - local_timestamp).total_seconds()) / 60
-            if local_timestamp >= current_timestamp_local - timedelta(hours=1):
-                if status:
-                    uptime_hour_min = uptime_hour_min + timediff
-                else:
-                    downtime_hour_min = downtime_hour_min + timediff
-            if local_timestamp >= current_timestamp_local - timedelta(days=1):
-                if status:
-                    uptime_day_min = uptime_day_min + timediff
-                else:
-                    downtime_day_min = downtime_day_min + timediff
-            if local_timestamp >= current_timestamp_local - timedelta(weeks=1):
-                if status:
-                    uptime_week_min = uptime_week_min + timediff
-                else:
-                    downtime_week_min = downtime_week_min + timediff
-            print(
-                uptime_hour_min,
-                uptime_day_min,
-                uptime_week_min,
-                downtime_hour_min,
-                downtime_day_min,
-                downtime_week_min,
-            )
-        last_time_stamp = local_timestamp
 
+    # last timestamp week assumption, store status same as last but one timestamp's store status
+    store_status_timestamps.append(
+        (CURRENT_TIMESTAMP - timedelta(weeks=1), store_status_timestamps[-1][1])
+    )
+
+    present_timestamp_local = UTCToLocalTimezone(CURRENT_TIMESTAMP, timezone)
+    store_businesshour_timestamps: List[List[Tuple[datetime, bool]]] = []
+    operational_247 = is247Operational(store_id)
+
+    if not operational_247:
+        # Assuming operational hours are unique and don't overlop
+        present_timestamp_business_hours = getBusinessHourTimestamp(
+            store_id, present_timestamp_local, timezone
+        )
+        if present_timestamp_business_hours:
+            [
+                present_timestamp_business_hours_start,
+                present_timestamp_business_hours_end,
+            ] = present_timestamp_business_hours
+            store_businesshour_timestamps.append(
+                [
+                    # we are going in reverse order
+                    (present_timestamp_business_hours_end, False),
+                    (
+                        present_timestamp_local,
+                        False,
+                    ),  # store can be assumed inactive currently
+                    (present_timestamp_business_hours_start, False),
+                ]
+            )
+        print(present_timestamp_business_hours)
+        for [timestamp_utc, status] in store_status_timestamps:
+            active: bool = True if status == "active" else False
+            local_timestamp: datetime = UTCToLocalTimezone(timestamp_utc, timezone)
+            current_local_business_hours = getBusinessHourTimestamp(
+                store_id, local_timestamp, timezone
+            )
+            if current_local_business_hours:
+                [
+                    current_local_business_hours_start,
+                    current_local_business_hours_end,
+                ] = current_local_business_hours
+
+                previous_timestamp_range_end = store_businesshour_timestamps[-1][0][0]
+                previous_timestamp_range_start = store_businesshour_timestamps[-1][-1][
+                    0
+                ]
+                if (
+                    len(store_businesshour_timestamps) > 0
+                    and previous_timestamp_range_start
+                    == current_local_business_hours_start
+                    and previous_timestamp_range_end == current_local_business_hours_end
+                ):
+                    store_businesshour_timestamps[-1].insert(
+                        -1, (local_timestamp, active)
+                    )
+                    print("inserted: ", local_timestamp, active)
+                    # updating business hours end timestamp with last but one timestamp
+                    business_end = store_businesshour_timestamps[-1].pop()
+
+                    store_businesshour_timestamps[-1].append((business_end[0], active))
+                    print("changed: ", store_businesshour_timestamps[-1][-1])
+                else:
+                    store_businesshour_timestamps.append(
+                        [
+                            (current_local_business_hours_end, False),
+                            (local_timestamp, active),
+                            (current_local_business_hours_start, active),
+                        ]
+                    )
+        store_businesshour_timestamps[
+            -1
+        ].pop()  # remove timestamp that crossed 7 days,  (current_local_business_hours_start, None)
+        store_businesshour_timestamps[0].pop(
+            0
+        )  # remove timestamp after current timestamp ,  (present_local_business_hours_end, None)
+    else:
+        store_businesshour_timestamps.append([(present_timestamp_local, False)])
+        for [timestamp_utc, status] in store_status_timestamps:
+            active: bool = True if status == "active" else False
+            local_timestamp: datetime = UTCToLocalTimezone(timestamp_utc, timezone)
+            store_businesshour_timestamps[0].append((local_timestamp, active))
+
+    for store_businesshour_timestamp in store_businesshour_timestamps:
+        print("----------------------------------------------------------------------")
+        for ind_timestamp in store_businesshour_timestamp:
+            print(ind_timestamp)
+        print("----------------------------------------------------------------------")
     print(store_id, timezone)
 
-    break
+    # Get all timestamps of the store
+    uptime_hour_min, uptime_day_min, uptime_week_min = 0, 0, 0
+    downtime_hour_min, downtime_day_min, downtime_week_min = 0, 0, 0
 
+    one_hour_before = present_timestamp_local - timedelta(hours=1)
+    one_day_before = present_timestamp_local - timedelta(days=1)
+    one_week_before = present_timestamp_local - timedelta(weeks=1)
+
+    track_hour = True
+    track_day = True
+    for store_businesshour_timestamp in store_businesshour_timestamps:
+        last_timestamp: datetime = store_businesshour_timestamp[0][0]
+        # going to be current timestamp or business_hours_end timestamp
+
+        for timestamp_idx, [local_timestamp, active] in enumerate(
+            store_businesshour_timestamp
+        ):
+            if timestamp_idx == 0:
+                # we have set this value as our last timestamp
+                continue
+
+            # Note: We judging the status of the store by last known status
+            # active: bool = True if status == "active" else False
+            # local_timestamp: datetime = UTCToLocalTimezone(timestamp_utc, timezone)
+            timediff = ((last_timestamp - local_timestamp).total_seconds()) / 60
+            # print(last_timestamp, local_timestamp, timediff, status)
+            print(local_timestamp, last_timestamp, timediff)
+
+            if track_hour:
+                if local_timestamp >= one_hour_before:
+                    uptime_hour_min += timediff if active else 0
+                    downtime_hour_min += timediff if not active else 0
+
+                else:
+                    remaining_time = (
+                        (last_timestamp - one_hour_before).total_seconds()
+                    ) / 60
+                    uptime_hour_min += remaining_time if active else 0
+                    downtime_hour_min += remaining_time if not active else 0
+                    track_hour = False
+
+            if track_day:
+                if local_timestamp >= one_day_before:
+                    uptime_day_min += timediff if active else 0
+                    downtime_day_min += timediff if not active else 0
+                else:
+                    remaining_time = (
+                        (last_timestamp - one_day_before).total_seconds()
+                    ) / 60
+                    uptime_day_min += remaining_time if active else 0
+                    downtime_day_min += remaining_time if not active else 0
+                    track_day = False
+
+            uptime_week_min += timediff if active else 0
+            downtime_week_min += timediff if not active else 0
+
+            last_timestamp = local_timestamp
+        # break
+    print(
+        round(uptime_hour_min),
+        round(uptime_day_min / 60),
+        round(uptime_week_min / 60),
+        round(downtime_hour_min),
+        round(downtime_day_min / 60),
+        round(downtime_week_min / 60),
+        CURRENT_TIMESTAMP,
+    )
+    print(store_id, timezone)
+    break
 
 conn.commit()
 
