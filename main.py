@@ -1,5 +1,7 @@
-from flask import Flask, send_file, make_response, redirect
+from flask import Flask, jsonify
+import json
 from flask_restful import Resource, Api, reqparse
+from flask_cors import CORS, cross_origin
 from postgres import PostgresDatabase
 import threading
 from io import BytesIO
@@ -8,6 +10,8 @@ from process import ProcessRequest
 
 app = Flask(__name__)
 api = Api(app)
+cors = CORS(app)
+app.config["CORS_HEADERS"] = "Content-Type"
 db = PostgresDatabase()
 db.runQuery(
     """
@@ -63,48 +67,17 @@ class GetReport(Resource):
 
         if not (status and status[0]):
             return {"message": "Report not found"}, 404
-
-        html_content = f"""
-            <html>
-            <head>
-                <title>Report Status</title>
-            </head>
-            <body>
-                <h1>{status[0]}</h1>
-            """
-        if status[0] == "Complete":
-            html_content += f"""<p>Click the link below to download the CSV file:
-            <a href="/download_report?report_id={report_id}">Download CSV</a></p>"""
-        html_content += """
-            </body>
-            </html>
-        """
-        response = make_response(html_content)
-        response.content_type = "text/html"
-        return response
-
-
-class DownloadReport(Resource):
-    def get(self):
-        args = parser.parse_args()
-        report_id = args["report_id"]
-        db.runQuery(f"SELECT report FROM reports WHERE report_id = {report_id}")
-        file = db.fetchOne()
-        if not (file and file[0]):
-            exit()
-        response = make_response(
-            send_file(
-                BytesIO(file[0]),
-                as_attachment=True,
-                download_name=(f"{report_id}.csv"),
-            )
-        )
-        return response
+        else:
+            db.runQuery(f"SELECT report FROM reports WHERE report_id = {report_id}")
+            file = db.fetchOne()
+            if not (file and file[0]):
+                return {"status": status[0]}
+            response = json.loads(file[0])
+            return {"status": status[0], "report": response}
 
 
 api.add_resource(TriggerReport, "/trigger_report")
 api.add_resource(GetReport, "/get_report")
-api.add_resource(DownloadReport, "/download_report")
 
 if __name__ == "__main__":
     app.run(debug=True)

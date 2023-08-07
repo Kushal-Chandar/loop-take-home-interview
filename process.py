@@ -3,6 +3,7 @@ from psycopg2 import Binary
 from typing import List, Tuple
 from timezone_conversion import UTCToLocalTimezone, ChangeTimezone
 from postgres import PostgresDatabase
+import json
 
 db = PostgresDatabase()
 
@@ -111,13 +112,13 @@ def ProcessRequest(report_id: int):
     db.runQuery("""SELECT DISTINCT store_id FROM store_status ORDER BY store_id ASC""")
     stores = db.fetchAll()
 
-    csv = "store_id,uptime_last_hour(in minutes),uptime_last_day(in hours),uptime_last_week(in hours),downtime_last_hour(in minutes),downtime_last_day(in hours),downtime_last_week(in hours)\n"
+    data = []
 
     db.runQuery(
         """
     CREATE TABLE IF NOT EXISTS reports (
         report_id SERIAL PRIMARY KEY,
-        report BYTEA
+        report TEXT
     )
     """
     )
@@ -125,6 +126,15 @@ def ProcessRequest(report_id: int):
     for store in stores:
         store_id: int = store[0]
         timezone: str = getStoreTimezone(store_id=store_id)
+        data_store = {
+            "store_id": store_id,
+            "uptime_last_hour(in minutes)": 0,
+            "uptime_last_day(in hours)": 0,
+            "uptime_last_week(in hours)": 0,
+            "downtime_last_hour(in minutes)": 0,
+            "downtime_last_day(in hours)": 0,
+            "downtime_last_week(in hours)": 0,
+        }
         print(store_id)
         uptime_hour_min, uptime_day_min, uptime_week_min = 0, 0, 0
         downtime_hour_min, downtime_day_min, downtime_week_min = 0, 0, 0
@@ -133,7 +143,6 @@ def ProcessRequest(report_id: int):
         )
 
         if len(store_status_timestamps) == 0:
-            csv += f"{store_id},{round(uptime_hour_min)},{round(uptime_day_min / 60)},{round(uptime_week_min / 60)},{round(downtime_hour_min)},{round(downtime_day_min / 60)},{round(downtime_week_min / 60)}\n"
             continue
 
         # last timestamp week assumption, store status same as last but one timestamp's store status
@@ -265,7 +274,17 @@ def ProcessRequest(report_id: int):
 
                 last_timestamp = local_timestamp
 
-        csv += f"{store_id},{round(uptime_hour_min)},{round(uptime_day_min / 60)},{round(uptime_week_min / 60)},{round(downtime_hour_min)},{round(downtime_day_min / 60)},{round(downtime_week_min / 60)}\n"
+        data_store["store_id"] = store_id
+        data_store["uptime_last_hour(in minutes)"] = round(uptime_hour_min)
+        data_store["uptime_last_day(in hours)"] = round(uptime_day_min)
+        data_store["uptime_last_week(in hours)"] = round(uptime_week_min)
+        data_store["downtime_last_hour(in minutes)"] = round(downtime_hour_min)
+        data_store["downtime_last_day(in hours)"] = round(downtime_day_min)
+        data_store["downtime_last_week(in hours)"] = round(downtime_week_min)
+
+        data.append(data_store)
+        break
+
     db.runQuery(
-        f"INSERT INTO reports (report_id, report) VALUES ({report_id}, {Binary(csv.encode())})"
+        f"INSERT INTO reports (report_id, report) VALUES ({report_id}, '{(json.dumps(data))}')"
     )
