@@ -58,3 +58,5 @@ Note: The data we have given is a static data set, so you can hard code the curr
       - if report generation is complete, return “Complete” along with the CSV file with the schema described above.
 
 ## Output Video
+
+https://github.com/Kushal-Chandar/loop-take-home-interview/assets/83660514/6b7b0a51-3848-4204-83e2-d6b8ddd05770
