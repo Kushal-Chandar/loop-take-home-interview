@@ -11,7 +11,7 @@ from process import ProcessRequest
 app = Flask(__name__)
 api = Api(app)
 cors = CORS(app)
-app.config["CORS_HEADERS"] = "Content-Type"
+app.config["CORS_HEADERS"] = "Access-Control-Allow-Origin'"
 db = PostgresDatabase()
 db.runQuery(
     """

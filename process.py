@@ -123,6 +123,7 @@ def ProcessRequest(report_id: int):
     """
     )
 
+    count = 0
     for store in stores:
         store_id: int = store[0]
         timezone: str = getStoreTimezone(store_id=store_id)
@@ -276,14 +277,17 @@ def ProcessRequest(report_id: int):
 
         data_store["store_id"] = store_id
         data_store["uptime_last_hour(in minutes)"] = round(uptime_hour_min)
-        data_store["uptime_last_day(in hours)"] = round(uptime_day_min)
-        data_store["uptime_last_week(in hours)"] = round(uptime_week_min)
+        data_store["uptime_last_day(in hours)"] = round(uptime_day_min // 60)
+        data_store["uptime_last_week(in hours)"] = round(uptime_week_min // 60)
         data_store["downtime_last_hour(in minutes)"] = round(downtime_hour_min)
-        data_store["downtime_last_day(in hours)"] = round(downtime_day_min)
-        data_store["downtime_last_week(in hours)"] = round(downtime_week_min)
+        data_store["downtime_last_day(in hours)"] = round(downtime_day_min // 60)
+        data_store["downtime_last_week(in hours)"] = round(downtime_week_min // 60)
 
         data.append(data_store)
-        break
+
+        count += 1
+        if count == 50:
+            break
 
     db.runQuery(
         f"INSERT INTO reports (report_id, report) VALUES ({report_id}, '{(json.dumps(data))}')"
